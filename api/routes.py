@@ -1,12 +1,11 @@
 from flask import Blueprint, jsonify, request
 from .models import User, Todo
 from .extensions import db, jwt
-
-
+from sqlalchemy.exc import SQLAlchemyError
 from flask_jwt_extended import create_access_token
-from flask_jwt_extended import get_jwt_identity
 from flask_jwt_extended import jwt_required
 from flask_jwt_extended import current_user
+
 
 
 main = Blueprint('main', __name__)
@@ -17,20 +16,31 @@ main = Blueprint('main', __name__)
 def user_identity_lookup(user):
     return user.id 
 
+@jwt.user_lookup_loader
 def user_lookup_callback(_jwt_header, jwt_data):
     identity = jwt_data["sub"]
     return User.query.filter_by(id=identity).one_or_none()
 
+
 ### Routes ###
+
+# helpder functions
+
+def isOwner(todo):
+    user_id = current_user.id
+    if user_id is None or user_id != todo.user_id:
+        return False
+    return True
+    
 
 # /register -> register as a user  -- POST
 @main.route('/register', methods=['POST'])
 def register():
     #user data
-    data = request.user
+    data = request.json
     username =  data.get("username", None)
     email = data.get("email", None)
-    password = data.json.get("password", None)
+    password = data.get("password", None)
 
     #validation
     if username is None or password is None or email is None:
@@ -52,25 +62,37 @@ def register():
         db.session.add(new_user)
         db.session.commit()
         return jsonify({"msg": "user added successfully."}), 201
+    
+    except SQLAlchemyError as e:
+        db.session.rollback()  # Rollback in case of error
+        # Optionally, log the error
+        return jsonify({"msg": "Database error", "error1": str(e)}), 500
+    
+    except Exception as e:
+        return jsonify({"msg": "server error", "error2": str(e)}), 500
+    
     except:
-        return jsonify({"msg": "server error"}), 500
+        return jsonify({"msg":"somryhin else"})
 
 
-# /login -> login as a user and receive jwt token --GET
+# /login -> login as a user and receive jwt token --POST
 @main.route('/login', methods=['POST'])
 def login():
     #user data
     username = request.json.get("username", None)
     password = request.json.get("password", None)
 
+    if username is None or password is None:
+        jsonify({"msg": "you must provide a username and a password"})
+
     #get user and validation
     user = User.query.filter_by(username=username).first()
 
-    if  user is None or not User.check_password(password):
+    if  user is None or not user.check_password(password):
         return jsonify({'msg' : 'incorrect password'})
 
     #provide access token
-    access_token = create_access_token(identity=username)
+    access_token = create_access_token(identity=user.id)
     return jsonify(access_token=access_token)
 
 # /todos -> create new todo --POST
@@ -84,11 +106,15 @@ def create_todo():
     #user data
     title = request.json.get("title", None)
     description = request.json.get("description", None)
+
+    if title is None or description is None:
+        return jsonify({"msg":"you must provide a title and a description"})
+
     #adding to db
-    new_todo = Todo(title=title, description=description, status="Active", user_id= user_id)
+    new_todo = Todo(title=title, description=description, status="ACTIVE", user_id= user_id)
     db.session.add(new_todo)
     db.session.commit()
-    todo = Todo.query.filter_by(title=title).first_or_404()
+    todo = Todo.query.filter_by(title=title, user_id = user_id).first_or_404()
     return jsonify(todo.to_dict())
 
 # /todos -> get all todos for a user --GET
@@ -96,15 +122,42 @@ def create_todo():
 @jwt_required()
 def get_items():
     # get user id and then return todos from that user
-    user_id = current_user.id
+    user_id = current_user.id   
     if user_id is None:
         return jsonify({"msg":"Authorisation token did not return a valid user"})
-    TodoData = User.query.filter_by(user_id = user_id)
-    return jsonify([todo.to_dict() for todo in TodoData])
+    # query params
+    page = request.args.get('page', 1, type=int)
+    limit = request.args.get('limit', 10, type=int)
+    search = request.args.get('search', "", type=str)
+    #return query data
+    TodoData = Todo.query.filter_by(user_id = user_id)
+    return jsonify([todo.to_dict() for todo in TodoData]), 200
 
 
 # /todos/id -> update existing todo --PUT
+@main.route('/<id>', methods=['PUT'])
+@jwt_required()
+def update_todo(id):
+    todo = Todo.query.filter_by(id = int(id)).first_or_404()
+    if isOwner(todo):
+        data = request.json
+        todo.title = data.get('title', todo.title)
+        todo.description = data.get('description', todo.description)
+        todo.status = data.get('status', todo.status)
+        db.session.commit()
+        updated_todo = Todo.query.filter_by(id = int(id)).first_or_404()
+        return jsonify(updated_todo.to_dict())
+    return jsonify({"msg ": "yoo do not have permission for this action"})
+
 
 
 # /todos/id -> delete existing todo --DELETE
-
+@main.route('/<id>', methods = ["DELETE"])
+@jwt_required()
+def delete_todo(id):
+    todo = Todo.query.filter_by(id = id).first_or_404()
+    if isOwner(todo):
+        db.session.delete(todo)
+        db.session.commit()
+        return '', 204
+    return jsonify({"msg": "You do not have authorisation for this item"})

@@ -9,12 +9,15 @@ class Todo_status(enum.Enum):
     ACTIVE = "Active"
     COMPLETED = "Complete"
 
+    def __str__(self):
+        return self.value
+
 
 class User(db.Model):
     __tablename__ = 'users'
     id : Mapped[int] = mapped_column(primary_key=True)
     username : Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
-    password_hash : Mapped[str] = mapped_column(String(128), nullable=False)
+    password_hash : Mapped[str] = mapped_column(String(256), nullable=False)
     email : Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
 
     #relationship with todo
@@ -38,7 +41,7 @@ class Todo(db.Model):
 
     #foreign key to User table
     user_id : Mapped[int] = mapped_column(ForeignKey(User.id), nullable=False)
-    user : Mapped['User'] = relationship('User', back_populates='Todo')
+    user : Mapped['User'] = relationship('User', back_populates='todo')
 
     def __repr__(self):
         return f'<title: {self.title}, task id: {self.id}>'
@@ -48,7 +51,7 @@ class Todo(db.Model):
             'id' : self.id,
             'title': self.title,
             'description' : self.description,
-            'status': self.status
+            'status': self.status.__str__()
         }
 
 
