@@ -11,6 +11,7 @@ flask-jwt-extended = "*"
 psycopg2-binary = "*"
 flask-limiter = "*"
 redis = "*"
+pytest = "*"
 
 [dev-packages]
 

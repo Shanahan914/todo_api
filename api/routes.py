@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from .models import User, Todo
 from .extensions import db, jwt
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import or_, and_
 from flask_jwt_extended import create_access_token
 from flask_jwt_extended import jwt_required
 from flask_jwt_extended import current_user
@@ -83,17 +84,17 @@ def login():
     password = request.json.get("password", None)
 
     if username is None or password is None:
-        jsonify({"msg": "you must provide a username and a password"})
+        return jsonify({"msg": "you must provide a username and a password"}), 400
 
     #get user and validation
     user = User.query.filter_by(username=username).first()
 
     if  user is None or not user.check_password(password):
-        return jsonify({'msg' : 'incorrect password'})
+        return jsonify({'msg' : 'incorrect details'}), 400
 
     #provide access token
     access_token = create_access_token(identity=user.id)
-    return jsonify(access_token=access_token)
+    return jsonify(access_token=access_token), 200
 
 # /todos -> create new todo --POST
 @main.route('/', methods=['POST'])
@@ -102,20 +103,20 @@ def create_todo():
     #user id from jwt token
     user_id = current_user.id
     if user_id is None:
-        return jsonify({"msg":"Authorisation token did not return a valid user"})
+        return jsonify({"msg":"Authorisation token did not return a valid user"}), 401
     #user data
     title = request.json.get("title", None)
     description = request.json.get("description", None)
 
     if title is None or description is None:
-        return jsonify({"msg":"you must provide a title and a description"})
+        return jsonify({"msg":"you must provide a title and a description"}), 400
 
     #adding to db
     new_todo = Todo(title=title, description=description, status="ACTIVE", user_id= user_id)
     db.session.add(new_todo)
     db.session.commit()
     todo = Todo.query.filter_by(title=title, user_id = user_id).first_or_404()
-    return jsonify(todo.to_dict())
+    return jsonify(todo.to_dict()), 201
 
 # /todos -> get all todos for a user --GET
 @main.route('/', methods=['GET'])
@@ -124,14 +125,30 @@ def get_items():
     # get user id and then return todos from that user
     user_id = current_user.id   
     if user_id is None:
-        return jsonify({"msg":"Authorisation token did not return a valid user"})
+        return jsonify({"msg":"Authorisation token did not return a valid user"}), 400
     # query params
     page = request.args.get('page', 1, type=int)
     limit = request.args.get('limit', 10, type=int)
-    search = request.args.get('search', "", type=str)
-    #return query data
-    TodoData = Todo.query.filter_by(user_id = user_id)
-    return jsonify([todo.to_dict() for todo in TodoData]), 200
+    search = request.args.get('search', "")
+
+    #filtering to user's items
+    userTodos = Todo.query.filter_by(user_id = user_id)
+    #search results
+    search_result = userTodos.filter(or_(
+        Todo.title.like(f"%{search}%"),
+        Todo.description.like(f"%{search}%")
+        )
+    )
+    # paginate results
+    paginated_result = search_result.paginate(page=page, per_page=limit, error_out=False)
+    #return final data
+    todoData = [todo.to_dict() for todo in paginated_result]
+    return jsonify({
+        'todos': todoData,  # Serialized todo items
+        'total': paginated_result.total,  # Total number of todos
+        'pages': paginated_result.pages,  # Total number of pages
+        'current_page': paginated_result.page  # Current page number
+    }), 200
 
 
 # /todos/id -> update existing todo --PUT
@@ -146,8 +163,8 @@ def update_todo(id):
         todo.status = data.get('status', todo.status)
         db.session.commit()
         updated_todo = Todo.query.filter_by(id = int(id)).first_or_404()
-        return jsonify(updated_todo.to_dict())
-    return jsonify({"msg ": "yoo do not have permission for this action"})
+        return jsonify(updated_todo.to_dict()), 201
+    return jsonify({"msg": "you do not have permission for this action"}), 401
 
 
 
@@ -160,4 +177,4 @@ def delete_todo(id):
         db.session.delete(todo)
         db.session.commit()
         return '', 204
-    return jsonify({"msg": "You do not have authorisation for this item"})
+    return jsonify({"msg": "You do not have authorisation for this item"}), 401
